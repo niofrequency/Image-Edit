@@ -5,7 +5,7 @@ import io
 import os
 import requests
 from PIL import Image
-from diffusers import StableDiffusionImg2ImgPipeline
+from diffusers import StableDiffusionXLImg2ImgPipeline
 from huggingface_hub import hf_hub_download
 
 # Point HuggingFace cache and custom models to the RunPod Network Volume
@@ -34,17 +34,17 @@ def setup_models():
         else:
             print(f"Failed to download BigLust. Status code: {response.status_code}")
 
-    # 2. Cache IP-Adapter weights
-    print("Verifying IP-Adapter weights on volume...")
-    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/ip-adapter_sd15.bin")
+    # 2. Cache SDXL IP-Adapter weights
+    print("Verifying SDXL IP-Adapter weights on volume...")
+    hf_hub_download(repo_id="h94/IP-Adapter", filename="sdxl_models/ip-adapter_sdxl.bin")
     hf_hub_download(repo_id="h94/IP-Adapter", filename="models/image_encoder/pytorch_model.bin")
 
 def load_pipeline():
     global pipe
     setup_models()
     
-    print("Loading pipeline into VRAM...")
-    pipe = StableDiffusionImg2ImgPipeline.from_single_file(
+    print("Loading SDXL pipeline into VRAM...")
+    pipe = StableDiffusionXLImg2ImgPipeline.from_single_file(
         BIGLUST_PATH,
         torch_dtype=torch.float16,
         use_safetensors=True,
@@ -53,8 +53,8 @@ def load_pipeline():
     
     pipe.load_ip_adapter(
         "h94/IP-Adapter", 
-        subfolder="models", 
-        weight_name="ip-adapter_sd15.bin"
+        subfolder="sdxl_models", 
+        weight_name="ip-adapter_sdxl.bin"
     )
     
     pipe.enable_xformers_memory_efficient_attention()
@@ -90,8 +90,8 @@ def handler(job):
         return {"error": "Both init_image and ip_adapter_image must be provided as base64 strings."}
 
     try:
-        init_image = decode_base64_image(init_image_b64).resize((512, 512))
-        ip_image = decode_base64_image(ip_adapter_image_b64).resize((512, 512))
+        init_image = decode_base64_image(init_image_b64).resize((1024, 1024))
+        ip_image = decode_base64_image(ip_adapter_image_b64).resize((1024, 1024))
     except Exception as e:
         return {"error": f"Failed to decode images: {str(e)}"}
 
