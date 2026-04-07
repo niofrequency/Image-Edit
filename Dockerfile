@@ -8,10 +8,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the builder script and run it to cache models inside the Docker image
-COPY download_models.py .
-RUN python download_models.py
-
 # Copy the handler script
 COPY handler.py .
 
