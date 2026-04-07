@@ -3,19 +3,47 @@ import torch
 import base64
 import io
 import os
+import requests
 from PIL import Image
 from diffusers import StableDiffusionImg2ImgPipeline
+from huggingface_hub import hf_hub_download
 
-# Global variables to hold the pipeline in memory across invocations
-pipe = None
-MODEL_CACHE_DIR = "/model_cache"
+# Point HuggingFace cache and custom models to the RunPod Network Volume
+os.environ["HF_HOME"] = "/runpod-volume/huggingface"
+MODEL_CACHE_DIR = "/runpod-volume/models"
 BIGLUST_PATH = os.path.join(MODEL_CACHE_DIR, "biglust.safetensors")
+
+pipe = None
+
+def setup_models():
+    """Downloads models to the Network Volume if they don't already exist."""
+    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+    
+    # 1. Download BigLust if missing
+    if not os.path.exists(BIGLUST_PATH):
+        print("BigLust not found. Downloading to Network Volume (This only happens on the very first boot)...")
+        BIGLUST_DOWNLOAD_URL = "https://civitai.com/api/download/models/1081768?type=Model&format=SafeTensor&size=full&fp=fp16&token=85a9d6503e3bd953780fa2250a93452a"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        response = requests.get(BIGLUST_DOWNLOAD_URL, headers=headers, stream=True)
+        if response.status_code == 200:
+            with open(BIGLUST_PATH, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print("BigLust model downloaded securely to volume.")
+        else:
+            print(f"Failed to download BigLust. Status code: {response.status_code}")
+
+    # 2. Cache IP-Adapter weights
+    print("Verifying IP-Adapter weights on volume...")
+    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/ip-adapter_sd15.bin")
+    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/image_encoder/pytorch_model.bin")
 
 def load_pipeline():
     global pipe
-    print("Loading pipeline into VRAM...")
+    setup_models()
     
-    # Load the custom safetensors model
+    print("Loading pipeline into VRAM...")
     pipe = StableDiffusionImg2ImgPipeline.from_single_file(
         BIGLUST_PATH,
         torch_dtype=torch.float16,
@@ -23,16 +51,12 @@ def load_pipeline():
         safety_checker=None
     )
     
-    # Load IP-Adapter
-    # Assuming standard SD1.5 IP-Adapter setup
     pipe.load_ip_adapter(
         "h94/IP-Adapter", 
         subfolder="models", 
-        weight_name="ip-adapter_sd15.bin",
-        cache_dir=MODEL_CACHE_DIR
+        weight_name="ip-adapter_sd15.bin"
     )
     
-    # Optimize for inference speed
     pipe.enable_xformers_memory_efficient_attention()
     pipe.to("cuda")
     print("Pipeline ready.")
@@ -41,8 +65,7 @@ def decode_base64_image(image_string):
     if "," in image_string:
         image_string = image_string.split(",")[1]
     image_bytes = base64.b64decode(image_string)
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    return image
+    return Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
 def encode_image_base64(image):
     buffered = io.BytesIO()
@@ -50,23 +73,9 @@ def encode_image_base64(image):
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def handler(job):
-    """
-    RunPod Serverless Handler.
-    Expects job_input payload:
-    {
-        "prompt": "text prompt",
-        "negative_prompt": "bad quality...",
-        "init_image": "base64_string",
-        "ip_adapter_image": "base64_string",
-        "strength": 0.7,
-        "guidance_scale": 7.5,
-        "steps": 30
-    }
-    """
     global pipe
     job_input = job.get("input", {})
 
-    # Extract parameters with defaults
     prompt = job_input.get("prompt", "masterpiece, best quality")
     negative_prompt = job_input.get("negative_prompt", "lowres, bad anatomy, worst quality")
     strength = float(job_input.get("strength", 0.6))
@@ -74,7 +83,6 @@ def handler(job):
     num_inference_steps = int(job_input.get("steps", 30))
     ip_adapter_scale = float(job_input.get("ip_adapter_scale", 0.5))
     
-    # Extract Images
     init_image_b64 = job_input.get("init_image")
     ip_adapter_image_b64 = job_input.get("ip_adapter_image")
 
@@ -82,20 +90,13 @@ def handler(job):
         return {"error": "Both init_image and ip_adapter_image must be provided as base64 strings."}
 
     try:
-        init_image = decode_base64_image(init_image_b64)
-        ip_image = decode_base64_image(ip_adapter_image_b64)
-        
-        # Resize images to standard dimensions for SD1.5 (e.g., 512x512) if needed
-        init_image = init_image.resize((512, 512))
-        ip_image = ip_image.resize((512, 512))
-
+        init_image = decode_base64_image(init_image_b64).resize((512, 512))
+        ip_image = decode_base64_image(ip_adapter_image_b64).resize((512, 512))
     except Exception as e:
         return {"error": f"Failed to decode images: {str(e)}"}
 
-    # Set IP-Adapter scale
     pipe.set_ip_adapter_scale(ip_adapter_scale)
 
-    # Run Inference
     try:
         result = pipe(
             prompt=prompt,
@@ -107,18 +108,13 @@ def handler(job):
             num_inference_steps=num_inference_steps
         ).images[0]
 
-        # Convert result to base64 to send back to your frontend/SaaS
-        result_b64 = encode_image_base64(result)
-        
         return {
             "status": "success",
-            "image": result_b64
+            "image": encode_image_base64(result)
         }
-
     except Exception as e:
         return {"error": f"Inference failed: {str(e)}"}
 
-# Initialize the model on container startup
 if __name__ == "__main__":
     load_pipeline()
     runpod.serverless.start({"handler": handler})
