@@ -1,7 +1,6 @@
 import os
 
 # 🚨 CRITICAL: These MUST be at the absolute top before ANY other imports 🚨
-# This forces HuggingFace and PyTorch to look at the massive Network Volume first
 os.environ["HF_HOME"] = "/runpod-volume/huggingface"
 os.environ["TORCH_HOME"] = "/runpod-volume/torch"
 MODEL_CACHE_DIR = "/runpod-volume/models"
@@ -37,10 +36,10 @@ def setup_models():
         else:
             print(f"Failed to download BigLust. Status code: {response.status_code}")
 
-    # 2. Cache SDXL IP-Adapter weights
+    # 2. Cache SDXL IP-Adapter weights (FIXED INDENTATION HERE)
     print("Verifying SDXL IP-Adapter weights on volume...")
-    hf_hub_download(repo_id="h94/IP-Adapter", filename="sdxl_models/ip-adapter_sdxl.bin")
-    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/image_encoder/pytorch_model.bin")
+    hf_hub_download(repo_id="h94/IP-Adapter", filename="sdxl_models/ip-adapter_sdxl.bin", local_dir="/runpod-volume/huggingface")
+    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/image_encoder/pytorch_model.bin", local_dir="/runpod-volume/huggingface")
 
 def load_pipeline():
     global pipe
@@ -60,7 +59,6 @@ def load_pipeline():
         weight_name="ip-adapter_sdxl.bin"
     )
     
-    pipe.enable_xformers_memory_efficient_attention()
     pipe.to("cuda")
     print("Pipeline ready.")
 
