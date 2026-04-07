@@ -1,6 +1,7 @@
 import os
 
 # 🚨 CRITICAL: These MUST be at the absolute top before ANY other imports 🚨
+# This forces HuggingFace and PyTorch to look at the massive Network Volume first
 os.environ["HF_HOME"] = "/runpod-volume/huggingface"
 os.environ["TORCH_HOME"] = "/runpod-volume/torch"
 MODEL_CACHE_DIR = "/runpod-volume/models"
@@ -36,16 +37,25 @@ def setup_models():
         else:
             print(f"Failed to download BigLust. Status code: {response.status_code}")
 
-    # 2. Cache SDXL IP-Adapter weights (FIXED INDENTATION HERE)
+    # 2. Cache SDXL IP-Adapter weights
     print("Verifying SDXL IP-Adapter weights on volume...")
-    hf_hub_download(repo_id="h94/IP-Adapter", filename="sdxl_models/ip-adapter_sdxl.bin", local_dir="/runpod-volume/huggingface")
-    hf_hub_download(repo_id="h94/IP-Adapter", filename="models/image_encoder/pytorch_model.bin", local_dir="/runpod-volume/huggingface")
+    hf_hub_download(
+        repo_id="h94/IP-Adapter", 
+        filename="sdxl_models/ip-adapter_sdxl.bin", 
+        local_dir="/runpod-volume/huggingface"
+    )
+    hf_hub_download(
+        repo_id="h94/IP-Adapter", 
+        filename="models/image_encoder/pytorch_model.bin", 
+        local_dir="/runpod-volume/huggingface"
+    )
 
 def load_pipeline():
     global pipe
     setup_models()
     
     print("Loading SDXL pipeline into VRAM...")
+    # Swapped to SDXL Img2Img Pipeline
     pipe = StableDiffusionXLImg2ImgPipeline.from_single_file(
         BIGLUST_PATH,
         torch_dtype=torch.float16,
@@ -53,11 +63,14 @@ def load_pipeline():
         safety_checker=None
     )
     
+    # Load SDXL specific IP-Adapter
     pipe.load_ip_adapter(
         "h94/IP-Adapter", 
         subfolder="sdxl_models", 
         weight_name="ip-adapter_sdxl.bin"
     )
+    
+    # pipe.enable_xformers_memory_efficient_attention() # REMOVED TO FIX CUDA KERNEL ERRORS
     
     pipe.to("cuda")
     print("Pipeline ready.")
@@ -77,8 +90,9 @@ def handler(job):
     global pipe
     job_input = job.get("input", {})
 
+    # Parameters
     prompt = job_input.get("prompt", "masterpiece, best quality")
-    negative_prompt = job_input.get("negative_prompt", "lowres, bad anatomy, worst quality")
+    negative_prompt = job_input.get("negative_prompt", "lowres, bad anatomy, worst quality, ugly")
     strength = float(job_input.get("strength", 0.6))
     guidance_scale = float(job_input.get("guidance_scale", 7.5))
     num_inference_steps = int(job_input.get("steps", 30))
@@ -91,6 +105,7 @@ def handler(job):
         return {"error": "Both init_image and ip_adapter_image must be provided as base64 strings."}
 
     try:
+        # SDXL prefers 1024x1024
         init_image = decode_base64_image(init_image_b64).resize((1024, 1024))
         ip_image = decode_base64_image(ip_adapter_image_b64).resize((1024, 1024))
     except Exception as e:
