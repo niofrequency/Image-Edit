@@ -1,17 +1,20 @@
+import os
+
+# 🚨 CRITICAL: These MUST be at the absolute top before ANY other imports 🚨
+# This forces HuggingFace and PyTorch to look at the massive Network Volume first
+os.environ["HF_HOME"] = "/runpod-volume/huggingface"
+os.environ["TORCH_HOME"] = "/runpod-volume/torch"
+MODEL_CACHE_DIR = "/runpod-volume/models"
+BIGLUST_PATH = os.path.join(MODEL_CACHE_DIR, "biglust.safetensors")
+
 import runpod
 import torch
 import base64
 import io
-import os
 import requests
 from PIL import Image
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from huggingface_hub import hf_hub_download
-
-# Point HuggingFace cache and custom models to the RunPod Network Volume
-os.environ["HF_HOME"] = "/runpod-volume/huggingface"
-MODEL_CACHE_DIR = "/runpod-volume/models"
-BIGLUST_PATH = os.path.join(MODEL_CACHE_DIR, "biglust.safetensors")
 
 pipe = None
 
